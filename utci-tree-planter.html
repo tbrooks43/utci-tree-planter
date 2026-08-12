@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>UTCI tree planter — prototype</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --chrome:#14171c; --panel:#1c2027; --panel-2:#232833;
+    --line:#2e343e; --line-hi:#3d4553;
+    --ink:#d6dbe3; --ink-dim:#828b99; --ink-faint:#5b6470;
+    --accent:#4fc3d9; --accent-dim:#2b7d8d;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--chrome);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
+  canvas{display:block}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+
+  #stage{position:fixed;inset:0}
+
+  .panel{position:fixed;background:var(--panel);border:1px solid var(--line);
+    border-radius:3px;font-size:12px;line-height:1.5}
+  .panel h2{margin:0;padding:9px 12px;font-size:10px;font-weight:600;letter-spacing:.11em;
+    text-transform:uppercase;color:var(--ink-faint);border-bottom:1px solid var(--line)}
+  .body{padding:12px}
+
+  #tools{top:14px;left:14px;width:236px}
+  #readout{top:14px;right:14px;width:230px}
+  #legend{bottom:14px;left:14px;width:236px}
+
+  .seg{display:flex;border:1px solid var(--line-hi);border-radius:3px;overflow:hidden;margin-bottom:14px}
+  .seg button{flex:1;padding:7px 0;background:transparent;border:0;border-right:1px solid var(--line-hi);
+    color:var(--ink-dim);font:inherit;font-size:11px;cursor:pointer}
+  .seg button:last-child{border-right:0}
+  .seg button[aria-pressed="true"]{background:var(--accent-dim);color:#eaf7fa}
+  .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+  label.field{display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--ink-faint);margin:0 0 5px}
+  select{width:100%;padding:6px 8px;background:var(--panel-2);color:var(--ink);
+    border:1px solid var(--line-hi);border-radius:3px;font:inherit;font-size:12px}
+  select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  .specs{margin:8px 0 14px;padding:8px 10px;background:var(--panel-2);border-radius:3px;
+    font-size:11px;color:var(--ink-dim);display:grid;grid-template-columns:1fr auto;gap:3px 10px}
+  .specs b{font-weight:400;color:var(--ink-faint)}
+
+  .row{display:flex;gap:8px}
+  .btn{flex:1;padding:7px 0;background:transparent;border:1px solid var(--line-hi);
+    border-radius:3px;color:var(--ink-dim);font:inherit;font-size:11px;cursor:pointer}
+  .btn:hover:not(:disabled){border-color:var(--accent-dim);color:var(--ink)}
+  .btn:disabled{opacity:.35;cursor:default}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+  .stat{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;
+    border-bottom:1px solid var(--line)}
+  .stat:last-child{border-bottom:0}
+  .stat span{font-size:11px;color:var(--ink-dim)}
+  .stat b{font-weight:500;font-size:14px}
+  .delta{font-size:11px;color:var(--accent);margin-left:6px}
+
+  .ramp{display:flex;height:9px;border-radius:2px;overflow:hidden;margin-bottom:5px}
+  .ramp i{flex:1}
+  .ticks{display:flex;justify-content:space-between;font-size:9px;color:var(--ink-faint)}
+  .note{margin-top:9px;font-size:10px;line-height:1.45;color:var(--ink-faint)}
+
+  #hint{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);padding:7px 14px;
+    background:rgba(20,23,28,.9);border:1px solid var(--line);border-radius:3px;
+    font-size:11px;color:var(--ink-dim);pointer-events:none}
+
+  #hud{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);display:none;
+    pointer-events:none;text-align:center}
+  #hud .dot{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.5);margin:0 auto}
+  #walkbar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:none;
+    background:rgba(20,23,28,.93);border:1px solid var(--line);border-radius:3px;
+    padding:9px 16px;align-items:center;gap:16px}
+  #walkbar .big{font-size:22px;font-weight:500}
+  #walkbar .cat{font-size:11px;letter-spacing:.05em}
+  #walkbar .sep{width:1px;height:26px;background:var(--line)}
+  #walkbar .k{font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em}
+</style>
+
+<div id="stage"></div>
+
+<section class="panel" id="tools">
+  <h2>Planting</h2>
+  <div class="body">
+    <div class="seg" role="group" aria-label="View mode">
+      <button id="m-plan" aria-pressed="true">Plan</button>
+      <button id="m-walk" aria-pressed="false">Walk</button>
+    </div>
+    <label class="field" for="species">Species</label>
+    <select id="species"></select>
+    <div class="specs mono" id="specs"></div>
+    <div class="row">
+      <button class="btn" id="undo" disabled>Undo</button>
+      <button class="btn" id="clear" disabled>Clear all</button>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="readout">
+  <h2>Effect at 15:00</h2>
+  <div class="body">
+    <div class="stat"><span>Trees planted</span><b class="mono" id="s-trees">0</b></div>
+    <div class="stat"><span>Mean UTCI</span><b class="mono" id="s-mean">—</b></div>
+    <div class="stat"><span>Above 46 °C</span><b class="mono" id="s-extreme">—</b></div>
+    <div class="stat"><span>Above 38 °C</span><b class="mono" id="s-severe">—</b></div>
+    <div class="stat"><span>New shade</span><b class="mono" id="s-shade">—</b></div>
+  </div>
+</section>
+
+<section class="panel" id="legend">
+  <h2>UTCI heat stress</h2>
+  <div class="body">
+    <div class="ramp" id="ramp"></div>
+    <div class="ticks mono"><span>26</span><span>32</span><span>38</span><span>46</span><span>52</span></div>
+    <p class="note" id="legend-note"></p>
+  </div>
+</section>
+
+<div id="hint">Click the ground to plant</div>
+<div id="hud"><div class="dot"></div></div>
+<div id="walkbar">
+  <div><div class="k">UTCI here</div><div class="big mono" id="w-utci">—</div></div>
+  <div class="sep"></div>
+  <div><div class="k">Condition</div><div class="cat" id="w-cat">—</div></div>
+  <div class="sep"></div>
+  <div><div class="k">Exit</div><div class="cat">Esc</div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ============================================================================
+   SITE CONFIGURATION  —  replace this block with your Austin data
+   ========================================================================= */
+
+const SITE = {
+  // Grid. Match your SOLWEIG raster: 2 m cells, 400 m across.
+  n: 200,
+  cell: 2.0,
+
+  // Single-hour forcing. From the met file that drove the SOLWEIG run.
+  hour: '15:00',
+  airTemp: 38.0,   // Ta, degC
+  humidity: 35,    // RH, %
+  wind: 2.5,       // va at 10 m, m/s
+
+  // Solar position for that hour. Austin, 30.27 N, early August, 15:00 CDT.
+  // Compute properly with pvlib or the UMEP solar routines for real runs.
+  sunAltitude: 56.0,   // degrees above horizon
+  sunAzimuth: 245.0,   // degrees clockwise from north
+};
+
+/* --- Endpoint fields -------------------------------------------------------
+   These two arrays are the whole thermal model. In production they are your
+   two SOLWEIG runs, read from GeoTIFF and quantised to texture tiles:
+
+     tmrtSun    run A, CDSM zeroed        -> no canopy anywhere
+     tmrtShade  run B, CDSM blanket 9 m   -> full canopy everywhere
+
+   Both runs keep buildings, so building shadow is already baked into each.
+   Here they are synthesised so the prototype runs standalone.
+------------------------------------------------------------------------- */
+
+const N = SITE.n, NC = N * N, HALF = N * SITE.cell / 2;
+
+let tmrtSun, tmrtShade, surfaceIsPaved, cellIsGround;
+
+/* --- UTCI lookup -----------------------------------------------------------
+   With Ta, RH and wind fixed at one hour, UTCI is a function of Tmrt alone.
+   Generate the real table once, then paste the numbers in here:
+
+     from pythermalcomfort.models import utci
+     import numpy as np
+     for t in np.arange(20, 90.5, 0.5):
+         print(round(utci(tdb=38.0, tr=float(t), v=2.5, rh=35.0), 3), end=', ')
+
+   The placeholder below is a linear-plus-curvature stand-in calibrated to
+   roughly the right slope for these conditions. It is NOT the Brode
+   polynomial and must be replaced before any number leaves this tool.
+------------------------------------------------------------------------- */
+
+const LUT_MIN = 20, LUT_MAX = 90, LUT_STEP = 0.5;
+const UTCI_LUT = (() => {
+  const out = [];
+  for (let t = LUT_MIN; t <= LUT_MAX + 1e-9; t += LUT_STEP) {
+    const d = t - SITE.airTemp;
+    out.push(SITE.airTemp + 0.352 * d - 0.00042 * d * Math.abs(d));
+  }
+  return Float32Array.from(out);
+})();
+
+function utciFromTmrt(tmrt) {
+  const x = (Math.min(Math.max(tmrt, LUT_MIN), LUT_MAX) - LUT_MIN) / LUT_STEP;
+  const i = Math.min(UTCI_LUT.length - 2, Math.floor(x)), f = x - i;
+  return UTCI_LUT[i] * (1 - f) + UTCI_LUT[i + 1] * f;
+}
+
+/* --- Species ---------------------------------------------------------------
+   Transmissivity is the fraction of shortwave passing through the crown.
+   SOLWEIG's default is 3%; real canopies range wider by species and season.
+------------------------------------------------------------------------- */
+
+const SPECIES = [
+  { id:'liveoak',  name:'Live oak',        crown:6.0, height:11, trunk:3.0, tau:0.07, leaf:0x3f5f3a },
+  { id:'cedarelm', name:'Cedar elm',       crown:4.5, height:9.5, trunk:3.0, tau:0.12, leaf:0x4a6b40 },
+  { id:'locust',   name:'Honey locust',    crown:5.0, height:9.0, trunk:3.5, tau:0.26, leaf:0x5d7a45 },
+  { id:'redbud',   name:'Texas redbud',    crown:3.0, height:5.5, trunk:2.0, tau:0.15, leaf:0x55663f },
+  { id:'sapling',  name:'Nursery sapling', crown:1.5, height:3.2, trunk:1.4, tau:0.18, leaf:0x5f7048 },
+];
+
+/* --- UTCI heat stress categories ---------------------------------------- */
+
+const BANDS = [
+  { max:26, label:'No thermal stress',   rgb:[ 92,142,168] },
+  { max:32, label:'Moderate heat stress',rgb:[214,196,120] },
+  { max:38, label:'Strong heat stress',  rgb:[224,150, 72] },
+  { max:46, label:'Very strong heat stress', rgb:[203, 84, 58] },
+  { max:99, label:'Extreme heat stress', rgb:[140, 38, 52] },
+];
+function bandFor(u){ for(const b of BANDS) if(u < b.max) return b; return BANDS[4]; }
+
+/* ============================================================================
+   TERRAIN + SYNTHETIC ENDPOINT FIELDS
+   ========================================================================= */
+
+let seed = 20260810;
+function rnd(){ seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+
+const BUILDINGS = [];
+function layoutBlocks(){
+  // Two arterials crossing at the origin, buildings set back in each quadrant.
+  const ROAD = 17;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    let z = ROAD + 9;
+    while (z < HALF - 26) {
+      const depth = 22 + rnd() * 20;
+      let x = ROAD + 9;
+      while (x < HALF - 26) {
+        const width = 20 + rnd() * 26;
+        if (rnd() > 0.24) {
+          BUILDINGS.push({
+            cx: sx * (x + width / 2), cz: sz * (z + depth / 2),
+            w: width, d: depth, h: 6 + rnd() * 26,
+          });
+        }
+        x += width + 8 + rnd() * 8;
+      }
+      z += depth + 12 + rnd() * 8;
+    }
+  }
+}
+
+function idx(i, j){ return j * N + i; }
+function cellCentre(i, j){
+  return [ -HALF + (i + 0.5) * SITE.cell, -HALF + (j + 0.5) * SITE.cell ];
+}
+
+function buildFields(){
+  tmrtSun        = new Float32Array(NC);
+  tmrtShade      = new Float32Array(NC);
+  surfaceIsPaved = new Uint8Array(NC);
+  cellIsGround   = new Uint8Array(NC).fill(1);
+
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const [x, z] = cellCentre(i, j), k = idx(i, j);
+
+    for (const b of BUILDINGS) {
+      if (Math.abs(x - b.cx) < b.w / 2 && Math.abs(z - b.cz) < b.d / 2) { cellIsGround[k] = 0; break; }
+    }
+
+    const onRoad = Math.abs(x) < 17 || Math.abs(z) < 17;
+    let paved = onRoad;
+    if (!paved) for (const b of BUILDINGS) {
+      if (Math.abs(x - b.cx) < b.w / 2 + 5 && Math.abs(z - b.cz) < b.d / 2 + 5) { paved = true; break; }
+    }
+    surfaceIsPaved[k] = paved ? 1 : 0;
+
+    // Low-frequency texture so the map is not flat. Stands in for real
+    // material and sky-view variation across the raster.
+    const w = Math.sin(x * 0.031) * Math.cos(z * 0.027) + Math.sin((x + z) * 0.017) * 0.6;
+
+    tmrtSun[k]   = (paved ? 70.5 : 61.0) + w * 2.4;
+    tmrtShade[k] = (paved ? 43.0 : 40.2) + w * 1.1;
+  }
+}
+
+/* ============================================================================
+   SHADE ACCUMULATION
+   Buildings are rasterised once. Each tree adds a projected crown ellipse.
+   Contributions combine multiplicatively so overlapping canopy and existing
+   building shadow never push coverage past 1.
+   ========================================================================= */
+
+const altRad = SITE.sunAltitude * Math.PI / 180;
+const aziRad = SITE.sunAzimuth  * Math.PI / 180;
+const SUN_ALT_SIN = Math.sin(altRad), SUN_ALT_TAN = Math.tan(altRad);
+// Ground direction the shadow falls in: opposite the sun's horizontal bearing.
+const SHX = -Math.sin(aziRad), SHZ = Math.cos(aziRad);
+
+let openSky;      // 1 = cell reaches unobstructed sun before any tree
+let shadeFrac;    // 0..1 total canopy+building coverage
+const trees = [];
+
+function rasteriseBuildings(){
+  openSky = new Float32Array(NC).fill(1);
+  for (const b of BUILDINGS) {
+    const L = b.h / SUN_ALT_TAN;
+    const pts = [];
+    for (const dx of [-1, 1]) for (const dz of [-1, 1]) {
+      const px = b.cx + dx * b.w / 2, pz = b.cz + dz * b.d / 2;
+      pts.push([px, pz], [px + L * SHX, pz + L * SHZ]);
+    }
+    fillHull(hull(pts), 0);
+  }
+  shadeFrac = new Float32Array(NC);
+  for (let k = 0; k < NC; k++) shadeFrac[k] = 1 - openSky[k];
+}
+
+function hull(pts){
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]);
+  const lo = [], up = [];
+  for (const q of p){ while(lo.length>1 && cross(lo[lo.length-2],lo[lo.length-1],q)<=0) lo.pop(); lo.push(q); }
+  for (let i=p.length-1;i>=0;i--){ const q=p[i]; while(up.length>1 && cross(up[up.length-2],up[up.length-1],q)<=0) up.pop(); up.push(q); }
+  lo.pop(); up.pop();
+  return lo.concat(up);
+}
+
+function fillHull(poly, transmissivity){
+  let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9;
+  for (const [x,z] of poly){ if(x<x0)x0=x; if(x>x1)x1=x; if(z<z0)z0=z; if(z>z1)z1=z; }
+  const i0=Math.max(0,Math.floor((x0+HALF)/SITE.cell)), i1=Math.min(N-1,Math.ceil((x1+HALF)/SITE.cell));
+  const j0=Math.max(0,Math.floor((z0+HALF)/SITE.cell)), j1=Math.min(N-1,Math.ceil((z1+HALF)/SITE.cell));
+  for (let j=j0;j<=j1;j++) for (let i=i0;i<=i1;i++){
+    const [x,z]=cellCentre(i,j);
+    let inside=true;
+    for (let a=0;a<poly.length;a++){
+      const p=poly[a], q=poly[(a+1)%poly.length];
+      if ((q[0]-p[0])*(z-p[1]) - (q[1]-p[1])*(x-p[0]) < 0){ inside=false; break; }
+    }
+    if (inside) openSky[idx(i,j)] *= transmissivity;
+  }
+}
+
+// Returns the set of cells the tree touched, so undo is exact.
+function applyTree(t, record){
+  const sp = t.sp;
+  const crownCentreHeight = sp.trunk + (sp.height - sp.trunk) * 0.55;
+  const r = sp.crown / 2;
+  const L = crownCentreHeight / SUN_ALT_TAN;
+  const cx = t.x + L * SHX, cz = t.z + L * SHZ;
+  const semiMajor = r / SUN_ALT_SIN;         // stretched along the shadow axis
+  const reach = semiMajor + SITE.cell;
+
+  const i0=Math.max(0,Math.floor((cx-reach+HALF)/SITE.cell)), i1=Math.min(N-1,Math.ceil((cx+reach+HALF)/SITE.cell));
+  const j0=Math.max(0,Math.floor((cz-reach+HALF)/SITE.cell)), j1=Math.min(N-1,Math.ceil((cz+reach+HALF)/SITE.cell));
+
+  for (let j=j0;j<=j1;j++) for (let i=i0;i<=i1;i++){
+    const [x,z]=cellCentre(i,j);
+    const dx=x-cx, dz=z-cz;
+    const along = (dx*SHX + dz*SHZ) / semiMajor;
+    const across = (dx*(-SHZ) + dz*SHX) / r;
+    const d = Math.sqrt(along*along + across*across);
+    if (d >= 1) continue;
+    const cover = d < 0.86 ? 1 : (1 - d) / 0.14;   // soft rim, avoids stair-stepping
+    const k = idx(i,j);
+    if (record) record.push([k, openSky[k]]);
+    openSky[k] *= (1 - cover * (1 - sp.tau));
+    shadeFrac[k] = 1 - openSky[k];
+  }
+}
+
+/* --- Blend in flux space, not temperature space -------------------------- */
+function tmrtAt(k){
+  const f = shadeFrac[k];
+  if (f <= 0) return tmrtSun[k];
+  if (f >= 1) return tmrtShade[k];
+  const a = tmrtSun[k] + 273.15, b = tmrtShade[k] + 273.15;
+  const q = (1 - f) * a*a*a*a + f * b*b*b*b;
+  return Math.pow(q, 0.25) - 273.15;
+}
+
+/* ============================================================================
+   SCENE
+   ========================================================================= */
+
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e1116);
+scene.fog = new THREE.Fog(0x0e1116, 320, 620);
+
+const planCam = new THREE.PerspectiveCamera(38, 1, 1, 2000);
+planCam.position.set(150, 300, 260); planCam.lookAt(0, 0, 0);
+const walkCam = new THREE.PerspectiveCamera(72, 1, 0.1, 900);
+let camera = planCam, mode = 'plan';
+
+scene.add(new THREE.AmbientLight(0xb8c6d4, 0.72));
+const sun = new THREE.DirectionalLight(0xfff0d8, 0.85);
+sun.position.set(Math.cos(altRad)*Math.sin(aziRad)*300, Math.sin(altRad)*300, -Math.cos(altRad)*Math.cos(aziRad)*300);
+scene.add(sun);
+
+// Thermal ground
+const texData = new Uint8Array(NC * 4);
+const groundTex = new THREE.DataTexture(texData, N, N, THREE.RGBAFormat);
+groundTex.magFilter = THREE.LinearFilter;
+groundTex.minFilter = THREE.LinearFilter;
+const groundMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(N * SITE.cell, N * SITE.cell),
+  new THREE.MeshBasicMaterial({ map: groundTex })
+);
+groundMesh.rotation.x = -Math.PI / 2;
+scene.add(groundMesh);
+
+// Buildings
+layoutBlocks();
+buildFields();
+rasteriseBuildings();
+
+const bMat = new THREE.MeshLambertMaterial({ color:0x2b3038 });
+const bGeo = new THREE.BoxGeometry(1,1,1);
+const bMesh = new THREE.InstancedMesh(bGeo, bMat, BUILDINGS.length);
+{
+  const m = new THREE.Matrix4();
+  BUILDINGS.forEach((b, i) => {
+    m.makeScale(b.w, b.h, b.d).setPosition(b.cx, b.h/2, b.cz);
+    bMesh.setMatrixAt(i, m);
+  });
+  bMesh.instanceMatrix.needsUpdate = true;
+}
+scene.add(bMesh);
+
+// Trees
+const MAX_TREES = 500;
+const trunkMesh = new THREE.InstancedMesh(
+  new THREE.CylinderGeometry(0.18, 0.26, 1, 6),
+  new THREE.MeshLambertMaterial({ color:0x4a3f33 }), MAX_TREES);
+const crownMesh = new THREE.InstancedMesh(
+  new THREE.SphereGeometry(1, 12, 9),
+  new THREE.MeshLambertMaterial({ color:0xffffff, vertexColors:true }), MAX_TREES);
+crownMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_TREES*3), 3);
+trunkMesh.count = crownMesh.count = 0;
+scene.add(trunkMesh, crownMesh);
+
+function pushTreeMesh(t){
+  const i = trees.length - 1, sp = t.sp;
+  const trunkH = sp.trunk, crownR = sp.crown/2, crownY = sp.trunk + (sp.height - sp.trunk)*0.55;
+  const m = new THREE.Matrix4();
+  m.makeScale(1, trunkH, 1).setPosition(t.x, trunkH/2, t.z);
+  trunkMesh.setMatrixAt(i, m);
+  m.makeScale(crownR, (sp.height - sp.trunk)*0.62, crownR).setPosition(t.x, crownY, t.z);
+  crownMesh.setMatrixAt(i, m);
+  const c = new THREE.Color(sp.leaf);
+  crownMesh.instanceColor.setXYZ(i, c.r, c.g, c.b);
+  trunkMesh.count = crownMesh.count = trees.length;
+  trunkMesh.instanceMatrix.needsUpdate = true;
+  crownMesh.instanceMatrix.needsUpdate = true;
+  crownMesh.instanceColor.needsUpdate = true;
+}
+
+/* ============================================================================
+   TEXTURE + STATS
+   ========================================================================= */
+
+let baseMean = 0, baseExtreme = 0, baseSevere = 0, groundCount = 0;
+
+function paint(){
+  let sum = 0, extreme = 0, severe = 0, shaded = 0, count = 0;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const k = idx(i,j);
+    // Texture rows run north-to-south; grid rows run south-to-north.
+    const p = ((N - 1 - j) * N + i) * 4;
+    if (!cellIsGround[k]) { texData[p]=38; texData[p+1]=42; texData[p+2]=50; texData[p+3]=255; continue; }
+    const u = utciFromTmrt(tmrtAt(k));
+    const c = bandFor(u).rgb;
+    // Slight within-band shading so gradients stay legible.
+    const t = 0.82 + 0.18 * Math.min(1, Math.max(0, (u - 24) / 28));
+    texData[p]   = c[0]*t; texData[p+1] = c[1]*t; texData[p+2] = c[2]*t; texData[p+3] = 255;
+    sum += u; count++;
+    if (u >= 46) extreme++;
+    if (u >= 38) severe++;
+    if (shadeFrac[k] > 0.5) shaded++;
+  }
+  groundTex.needsUpdate = true;
+  groundCount = count;
+  return { mean: sum/count, extreme: extreme/count, severe: severe/count, shaded: shaded/count };
+}
+
+let baseShaded = 0;
+function refreshStats(s){
+  const f = (v) => (v*100).toFixed(1) + '%';
+  document.getElementById('s-trees').textContent = trees.length;
+  document.getElementById('s-mean').innerHTML = s.mean.toFixed(1) + ' °C' +
+    (trees.length ? `<span class="delta">${(s.mean-baseMean).toFixed(2)}</span>` : '');
+  document.getElementById('s-extreme').innerHTML = f(s.extreme) +
+    (trees.length ? `<span class="delta">${((s.extreme-baseExtreme)*100).toFixed(1)}</span>` : '');
+  document.getElementById('s-severe').innerHTML = f(s.severe) +
+    (trees.length ? `<span class="delta">${((s.severe-baseSevere)*100).toFixed(1)}</span>` : '');
+  const area = (s.shaded - baseShaded) * groundCount * SITE.cell * SITE.cell;
+  document.getElementById('s-shade').textContent = trees.length ? Math.round(area).toLocaleString() + ' m²' : '—';
+  document.getElementById('undo').disabled = !trees.length;
+  document.getElementById('clear').disabled = !trees.length;
+}
+
+/* ============================================================================
+   INTERACTION
+   ========================================================================= */
+
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let currentSpecies = SPECIES[0];
+const history = [];
+
+function plantAt(x, z){
+  if (Math.abs(x) > HALF - 2 || Math.abs(z) > HALF - 2) return;
+  if (trees.length >= MAX_TREES) return;
+  const k = idx(Math.floor((x+HALF)/SITE.cell), Math.floor((z+HALF)/SITE.cell));
+  if (!cellIsGround[k]) return;               // no planting inside a building
+  const t = { x, z, sp: currentSpecies };
+  trees.push(t);
+  const record = [];
+  applyTree(t, record);
+  history.push(record);
+  pushTreeMesh(t);
+  refreshStats(paint());
+}
+
+function undo(){
+  if (!trees.length) return;
+  for (const [k, prev] of history.pop()) { openSky[k] = prev; shadeFrac[k] = 1 - prev; }
+  trees.pop();
+  trunkMesh.count = crownMesh.count = trees.length;
+  refreshStats(paint());
+}
+
+function clearAll(){ while (trees.length) undo(); }
+
+renderer.domElement.addEventListener('click', (e) => {
+  if (mode !== 'plan') return;
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.x = ((e.clientX - r.left)/r.width)*2 - 1;
+  ndc.y = -((e.clientY - r.top)/r.height)*2 + 1;
+  ray.setFromCamera(ndc, camera);
+  const hit = ray.intersectObject(groundMesh)[0];
+  if (hit) plantAt(hit.point.x, hit.point.z);
+});
+
+// Plan-view orbit
+let dragging = false, lastX = 0, lastY = 0, orbitYaw = 0.72, orbitPitch = 0.82, orbitDist = 420;
+renderer.domElement.addEventListener('pointerdown', e => {
+  if (mode !== 'plan') return;
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+  renderer.domElement.setPointerCapture(e.pointerId);
+});
+renderer.domElement.addEventListener('pointerup', e => {
+  dragging = false;
+  try { renderer.domElement.releasePointerCapture(e.pointerId); } catch(_) {}
+});
+renderer.domElement.addEventListener('pointermove', e => {
+  if (!dragging || mode !== 'plan') return;
+  orbitYaw   -= (e.clientX - lastX) * 0.005;
+  orbitPitch = Math.min(1.45, Math.max(0.22, orbitPitch - (e.clientY - lastY) * 0.004));
+  lastX = e.clientX; lastY = e.clientY;
+  placeOrbit();
+});
+renderer.domElement.addEventListener('wheel', e => {
+  if (mode !== 'plan') return;
+  e.preventDefault();
+  orbitDist = Math.min(700, Math.max(90, orbitDist * (1 + Math.sign(e.deltaY)*0.09)));
+  placeOrbit();
+}, { passive:false });
+
+function placeOrbit(){
+  planCam.position.set(
+    Math.sin(orbitYaw)*Math.cos(orbitPitch)*orbitDist,
+    Math.sin(orbitPitch)*orbitDist,
+    Math.cos(orbitYaw)*Math.cos(orbitPitch)*orbitDist);
+  planCam.lookAt(0, 0, 0);
+}
+
+// Walk mode
+const keys = Object.create(null);
+let walkYaw = 0, walkPitch = 0;
+const walkPos = new THREE.Vector3(0, 1.65, 60);
+
+addEventListener('keydown', e => { keys[e.code] = true; });
+addEventListener('keyup',   e => { keys[e.code] = false; });
+
+document.addEventListener('pointerlockchange', () => {
+  if (mode === 'walk' && !document.pointerLockElement) setMode('plan');
+});
+document.addEventListener('mousemove', e => {
+  if (mode !== 'walk' || !document.pointerLockElement) return;
+  walkYaw   -= e.movementX * 0.0022;
+  walkPitch = Math.max(-1.3, Math.min(1.3, walkPitch - e.movementY * 0.0022));
+});
+
+function setMode(next){
+  mode = next;
+  const plan = next === 'plan';
+  camera = plan ? planCam : walkCam;
+  document.getElementById('m-plan').setAttribute('aria-pressed', plan);
+  document.getElementById('m-walk').setAttribute('aria-pressed', !plan);
+  document.getElementById('hint').style.display = plan ? '' : 'none';
+  document.getElementById('hud').style.display = plan ? 'none' : 'block';
+  document.getElementById('walkbar').style.display = plan ? 'none' : 'flex';
+  if (plan && document.pointerLockElement) document.exitPointerLock();
+  if (!plan) renderer.domElement.requestPointerLock();
+}
+document.getElementById('m-plan').onclick = () => setMode('plan');
+document.getElementById('m-walk').onclick = () => setMode('walk');
+
+function stepWalk(dt){
+  const speed = (keys.ShiftLeft ? 11 : 4.6) * dt;
+  let fx = 0, fz = 0;
+  if (keys.KeyW || keys.ArrowUp)    fz -= 1;
+  if (keys.KeyS || keys.ArrowDown)  fz += 1;
+  if (keys.KeyA || keys.ArrowLeft)  fx -= 1;
+  if (keys.KeyD || keys.ArrowRight) fx += 1;
+  if (fx || fz) {
+    const len = Math.hypot(fx, fz);
+    const sin = Math.sin(walkYaw), cos = Math.cos(walkYaw);
+    const dx = ((fx*cos - fz*sin)/len)*speed, dz = ((fx*sin + fz*cos)/len)*speed;
+    const nx = walkPos.x + dx, nz = walkPos.z + dz;
+    if (!blocked(nx, walkPos.z)) walkPos.x = nx;
+    if (!blocked(walkPos.x, nz)) walkPos.z = nz;
+    walkPos.x = Math.max(-HALF+1, Math.min(HALF-1, walkPos.x));
+    walkPos.z = Math.max(-HALF+1, Math.min(HALF-1, walkPos.z));
+  }
+  walkCam.position.copy(walkPos);
+  walkCam.rotation.set(walkPitch, walkYaw, 0, 'YXZ');
+
+  const i = Math.floor((walkPos.x+HALF)/SITE.cell), j = Math.floor((walkPos.z+HALF)/SITE.cell);
+  const k = idx(Math.max(0,Math.min(N-1,i)), Math.max(0,Math.min(N-1,j)));
+  const u = utciFromTmrt(tmrtAt(k)), band = bandFor(u);
+  document.getElementById('w-utci').textContent = u.toFixed(1) + ' °C';
+  const el = document.getElementById('w-cat');
+  el.textContent = band.label;
+  el.style.color = `rgb(${band.rgb.join(',')})`;
+}
+
+function blocked(x, z){
+  for (const b of BUILDINGS)
+    if (Math.abs(x-b.cx) < b.w/2 + 0.6 && Math.abs(z-b.cz) < b.d/2 + 0.6) return true;
+  return false;
+}
+
+/* ============================================================================
+   UI WIRING
+   ========================================================================= */
+
+const sel = document.getElementById('species');
+SPECIES.forEach(s => sel.add(new Option(s.name, s.id)));
+function showSpecs(){
+  const s = currentSpecies;
+  document.getElementById('specs').innerHTML =
+    `<b>Crown</b><span>${s.crown.toFixed(1)} m</span>` +
+    `<b>Height</b><span>${s.height.toFixed(1)} m</span>` +
+    `<b>Trunk</b><span>${s.trunk.toFixed(1)} m</span>` +
+    `<b>Transmissivity</b><span>${(s.tau*100).toFixed(0)}%</span>`;
+}
+sel.onchange = () => { currentSpecies = SPECIES.find(s => s.id === sel.value); showSpecs(); };
+showSpecs();
+
+document.getElementById('undo').onclick = undo;
+document.getElementById('clear').onclick = clearAll;
+addEventListener('keydown', e => {
+  if (mode === 'plan' && (e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); undo(); }
+});
+
+document.getElementById('ramp').innerHTML =
+  BANDS.map(b => `<i style="background:rgb(${b.rgb.join(',')})" title="${b.label}"></i>`).join('');
+document.getElementById('legend-note').textContent =
+  `Ta ${SITE.airTemp} °C · RH ${SITE.humidity}% · wind ${SITE.wind} m/s · sun ${SITE.sunAltitude}° alt, ${SITE.sunAzimuth}° az`;
+
+function resize(){
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h);
+  planCam.aspect = walkCam.aspect = w/h;
+  planCam.updateProjectionMatrix(); walkCam.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+placeOrbit();
+
+const base = paint();
+baseMean = base.mean; baseExtreme = base.extreme; baseSevere = base.severe; baseShaded = base.shaded;
+refreshStats(base);
+
+let prev = performance.now();
+(function loop(now){
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.05, (now - prev)/1000); prev = now;
+  if (mode === 'walk') stepWalk(dt);
+  renderer.render(scene, camera);
+})(performance.now());
+</script>

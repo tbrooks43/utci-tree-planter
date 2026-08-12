@@ -1,0 +1,37 @@
+This file provides run settings for the SOLWEIG run initiated at: Wed, 12 Aug 2026 14:24:39
+Version: SOLWEIG v2022a
+
+SURFACE DATA
+Digital surface model (DSM): C:\Users\Trevor\Downloads\UTCI Files\data\DSM.tif
+Model domain: rows = 204, columns = 317
+Projected reference system: NAD83(2011) / UTM zone 14N
+Geographical coordinate system: NAD83(2011)
+Latitude: 30.353276247561688
+Longitude: -97.71699815949414
+UTC: -6.0
+Transmissivity of light through vegetation: 0.05
+Digital vegetation canopy model (CDSM): C:\Users\Trevor\Downloads\UTCI Files\rerun\CDSM_corrected.tif
+Trunkzone estimated from CDSM
+Trunkzone as percent of canopy height: 0.25
+Landcover scheme active. Parameters taken from: C:\Users/Trevor/AppData/Roaming/QGIS/QGIS3\profiles\default/python/plugins\processing_umep\processor/landcoverclasses_2016a.txt
+Landcover grid: C:\Users\Trevor\Downloads\UTCI Files\rerun\landcover.tif
+
+Land cover used to identify buildings
+
+METEOROLOGICAL FORCING DATA
+Meteorological file: C:\Users\Trevor\Downloads\UTCI Files\rerun\metforcing_hour13.txt
+Diffuse and direct shortwave radiation estimated from global radiation
+
+HUMAN EXPOSURE PARAMETERS
+Absorption, shortwave radiation: 0.7
+Absorption, longwave radiation: 0.95
+Posture of human body: Standing
+ENVIRONMENTAL PARAMETERS
+Albedo of walls: 0.2
+Albedo of ground (not used if land cover scheme is active): 0.15
+Emissivity (walls): 0.9
+Emissivity of ground (not used if land cover scheme is active): 0.95
+
+ADDITIONAL SETTINGS
+Human considered as a standing cylinder
+Isotropic sky

@@ -1,0 +1,2 @@
+# UTC, posture, onlyglobal, landcover, anisotropic, cylinder, albedo_walls, albedo_ground, emissivity_walls, emissivity_ground, absK, absL, elevation, patch_option
+-6 0 1 1 0 1 0.20 0.15 0.90 0.95 0.70 0.95 231.28 0

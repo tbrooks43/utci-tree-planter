@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>UTCI tree planter — Jamestown Park</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{
+    --chrome:#14171c; --panel:#1c2027; --panel-2:#232833;
+    --line:#2e343e; --line-hi:#3d4553;
+    --ink:#d6dbe3; --ink-dim:#828b99; --ink-faint:#5b6470;
+    --accent:#4fc3d9; --accent-dim:#2b7d8d;
+    --warn:#e0a03a;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--chrome);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink)}
+  canvas{display:block}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+
+  #stage{position:fixed;inset:0}
+
+  .panel{position:fixed;background:var(--panel);border:1px solid var(--line);
+    border-radius:3px;font-size:12px;line-height:1.5}
+  .panel h2{margin:0;padding:9px 12px;font-size:10px;font-weight:600;letter-spacing:.11em;
+    text-transform:uppercase;color:var(--ink-faint);border-bottom:1px solid var(--line)}
+  .body{padding:12px}
+
+  #scenario{top:14px;left:50%;transform:translateX(-50%);width:290px;text-align:center}
+  #tools{top:14px;left:14px;width:250px}
+  #readout{top:14px;right:14px;width:230px}
+  #legend{bottom:14px;left:14px;width:250px}
+  #limits{bottom:14px;right:14px;width:280px}
+
+  .seg{display:flex;border:1px solid var(--line-hi);border-radius:3px;overflow:hidden;margin-bottom:14px}
+  .seg button{flex:1;padding:7px 0;background:transparent;border:0;border-right:1px solid var(--line-hi);
+    color:var(--ink-dim);font:inherit;font-size:11px;cursor:pointer}
+  .seg button:last-child{border-right:0}
+  .seg button[aria-pressed="true"]{background:var(--accent-dim);color:#eaf7fa}
+  .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+  label.field{display:block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--ink-faint);margin:0 0 5px}
+  select{width:100%;padding:6px 8px;background:var(--panel-2);color:var(--ink);
+    border:1px solid var(--line-hi);border-radius:3px;font:inherit;font-size:12px}
+  select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  input[type=range]{width:100%}
+
+  .specs{margin:8px 0 14px;padding:8px 10px;background:var(--panel-2);border-radius:3px;
+    font-size:11px;color:var(--ink-dim);display:grid;grid-template-columns:1fr auto;gap:3px 10px}
+  .specs b{font-weight:400;color:var(--ink-faint)}
+
+  .row{display:flex;gap:8px}
+  .btn{flex:1;padding:7px 0;background:transparent;border:1px solid var(--line-hi);
+    border-radius:3px;color:var(--ink-dim);font:inherit;font-size:11px;cursor:pointer}
+  .btn:hover:not(:disabled){border-color:var(--accent-dim);color:var(--ink)}
+  .btn:disabled{opacity:.35;cursor:default}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .btn[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+
+  .stat{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;
+    border-bottom:1px solid var(--line)}
+  .stat:last-child{border-bottom:0}
+  .stat span{font-size:11px;color:var(--ink-dim)}
+  .stat b{font-weight:500;font-size:14px}
+  .delta{font-size:11px;color:var(--accent);margin-left:6px}
+
+  .ramp{display:flex;height:9px;border-radius:2px;overflow:hidden;margin-bottom:5px}
+  .ramp i{flex:1}
+  .ticks{display:flex;justify-content:space-between;font-size:9px;color:var(--ink-faint)}
+  .note{margin-top:9px;font-size:10px;line-height:1.45;color:var(--ink-faint)}
+
+  #limits ul{margin:0;padding-left:16px}
+  #limits li{margin-bottom:7px;font-size:10.5px;line-height:1.5;color:var(--ink-dim)}
+  #limits li::marker{color:var(--warn)}
+
+  .field-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+  .field-row .val{font-size:11px;color:var(--accent)}
+
+  #hint{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);padding:7px 14px;
+    background:rgba(20,23,28,.9);border:1px solid var(--line);border-radius:3px;
+    font-size:11px;color:var(--ink-dim);pointer-events:none}
+
+  #hud{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);display:none;
+    pointer-events:none;text-align:center}
+  #hud .dot{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.5);margin:0 auto}
+  #walkbar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:none;
+    background:rgba(20,23,28,.93);border:1px solid var(--line);border-radius:3px;
+    padding:9px 16px;align-items:center;gap:16px}
+  #walkbar .big{font-size:22px;font-weight:500}
+  #walkbar .cat{font-size:11px;letter-spacing:.05em}
+  #walkbar .sep{width:1px;height:26px;background:var(--line)}
+  #walkbar .k{font-size:10px;color:var(--ink-faint);text-transform:uppercase;letter-spacing:.08em}
+
+  #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:var(--chrome);color:var(--ink-dim);font-size:13px;z-index:10}
+
+  #point-readout{position:fixed;display:none;pointer-events:none;transform:translate(14px,14px);
+    background:rgba(20,23,28,.95);border:1px solid var(--line);border-radius:3px;
+    padding:6px 10px;font-size:11px;color:var(--ink-dim);z-index:5}
+  #point-readout b{font-size:15px;font-weight:500;color:var(--ink);font-family:ui-monospace,monospace}
+</style>
+
+<div id="stage"></div>
+<div id="loading">Loading site data…</div>
+
+<section class="panel" id="scenario" style="display:none">
+  <h2>Scenario</h2>
+  <div class="body">
+    <div class="seg" role="group" aria-label="Scenario" id="scenario-seg"></div>
+    <p class="note" id="scenario-note" style="margin-top:9px"></p>
+  </div>
+</section>
+
+<section class="panel" id="tools" style="display:none">
+  <h2>Planting</h2>
+  <div class="body">
+    <div class="seg" role="group" aria-label="View mode">
+      <button id="m-plan" aria-pressed="true">Plan</button>
+      <button id="m-walk" aria-pressed="false">Walk</button>
+    </div>
+    <label class="field" for="species">Species</label>
+    <select id="species"></select>
+    <div class="specs mono" id="specs"></div>
+
+    <div class="field-row"><label class="field" for="years" style="margin:0">Years since planting</label>
+      <span class="val mono" id="years-val">0</span></div>
+    <input type="range" id="years" min="0" max="15" step="1" value="0">
+
+    <div class="row" style="margin-top:12px">
+      <button class="btn" id="undo" disabled>Undo</button>
+      <button class="btn" id="clear" disabled>Clear all</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" id="toggle-uncertainty" aria-pressed="false">Show uncertainty</button>
+    </div>
+
+    <div class="field-row" style="margin-top:12px"><label class="field" for="basemap" style="margin:0">Aerial imagery</label>
+      <span class="val mono" id="basemap-val">0%</span></div>
+    <input type="range" id="basemap" min="0" max="100" step="5" value="0">
+  </div>
+</section>
+
+<section class="panel" id="readout" style="display:none">
+  <h2>Effect at <span id="hour-label"></span></h2>
+  <div class="body">
+    <div class="stat"><span>Trees planted</span><b class="mono" id="s-trees">0</b></div>
+    <div class="stat"><span>Mean UTCI</span><b class="mono" id="s-mean">—</b></div>
+    <div class="stat"><span>Above 46 °C</span><b class="mono" id="s-extreme">—</b></div>
+    <div class="stat"><span>Above 38 °C</span><b class="mono" id="s-severe">—</b></div>
+    <div class="stat"><span>New shade</span><b class="mono" id="s-shade">—</b></div>
+  </div>
+</section>
+
+<section class="panel" id="legend" style="display:none">
+  <h2 id="legend-title">UTCI heat stress</h2>
+  <div class="body">
+    <div class="ramp" id="ramp"></div>
+    <div class="ticks mono" id="ramp-ticks"><span>26</span><span>32</span><span>38</span><span>46</span><span>52</span></div>
+    <p class="note" id="legend-note"></p>
+  </div>
+</section>
+
+<section class="panel" id="limits" style="display:none">
+  <h2>Known limits</h2>
+  <div class="body"><ul id="limits-list"></ul></div>
+</section>
+
+<div id="hint">Click the ground to plant · hover to inspect UTCI</div>
+<div id="point-readout"></div>
+<div id="hud"><div class="dot"></div></div>
+<div id="walkbar">
+  <div><div class="k">UTCI here</div><div class="big mono" id="w-utci">—</div></div>
+  <div class="sep"></div>
+  <div><div class="k">Condition</div><div class="cat" id="w-cat">—</div></div>
+  <div class="sep"></div>
+  <div><div class="k">Exit</div><div class="cat">Esc</div></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="main.js?v=11"></script>
