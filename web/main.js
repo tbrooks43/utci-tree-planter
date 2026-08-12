@@ -110,6 +110,35 @@ async function main(){
       meanUtciBaseline: manifest.scenarios[name].meanUtciBaseline,
     };
   }
+  // Implied existing-canopy openSky fraction at each cell, backed out from the
+  // scenario's own two SOLWEIG endpoint runs by solving the same flux-blend
+  // used at runtime (T^4 = (1-f)*Tsun^4 + f*Tshade^4) for f given the real
+  // measured baseline. This is what lets "remove an existing tree" undo a
+  // share of that implied coverage using the same multiplicative-shadow math
+  // as planting, instead of needing a third SOLWEIG run per removed tree.
+  function computeOpenSkyBase(name){
+    const S = scenarioData[name];
+    const out = new Float32Array(NC);
+    for (let k = 0; k < NC; k++) {
+      if (!cellIsGround[k]) { out[k] = 1; continue; }
+      const tsun4 = Math.pow(S.tmrtSun[k] + 273.15, 4);
+      const tshade4 = Math.pow(S.tmrtShade[k] + 273.15, 4);
+      const tbase4 = Math.pow(S.tmrtBaseline[k] + 273.15, 4);
+      const denom = tshade4 - tsun4;
+      const f = denom > 1e-6 ? (tbase4 - tsun4) / denom : 0;
+      // Clamped to [0,1] -- narrow/enclosed cells get a small SVF-bin delta
+      // by the stage-2 imputation's own design (CLAUDE.md's stratification),
+      // so denom can be small there and an unclamped f swings wildly for a
+      // perfectly ordinary measured baseline. Clamping keeps this bounded;
+      // the resulting bias in the (rare) out-of-envelope case is imperceptible
+      // in practice and confined to cells actually touched by a removal --
+      // see recomputeBaselineEff, which leaves every other cell untouched.
+      out[k] = 1 - Math.min(1, Math.max(0, f));
+    }
+    return out;
+  }
+  for (const name of scenarioNames) scenarioData[name].openSkyBase = computeOpenSkyBase(name);
+
   let scenarioName = manifest.defaultScenario;
   let SCEN = scenarioData[scenarioName];
 
@@ -134,14 +163,14 @@ async function main(){
   // years-since-planting growth model: linear ramp to full size over 15 years
   function growthFraction(years){ return Math.max(0.08, Math.min(1, years / 15)); }
 
-  function applyTree(t, growth){
-    const sp = t.sp;
-    const crown = sp.crown * growth, height = sp.trunk + (sp.height - sp.trunk) * growth + sp.trunk * 0;
-    const trunkH = sp.trunk * Math.max(growth, 0.3);
-    const crownCentreHeight = trunkH + (sp.height * growth - trunkH) * 0.55;
-    const r = Math.max(0.3, crown / 2);
+  // Casts a crown's shadow ellipse (CLAUDE.md's projection formula) and calls
+  // cb(cellIndex, coverageFraction) for every ground cell it touches. Shared
+  // by new-tree planting (multiplies a cell's openSky down) and existing-tree
+  // removal (divides a cell's implied openSky back up) -- same geometry, used
+  // in opposite directions.
+  function forEachEllipseCell(treeX, treeZ, crownCentreHeight, r, cb){
     const L = crownCentreHeight / SUN_ALT_TAN;
-    const cx = t.x + L * SHX, cz = t.z + L * SHZ;
+    const cx = treeX + L * SHX, cz = treeZ + L * SHZ;
     const semiMajor = r / SUN_ALT_SIN;
     const reach = semiMajor + CELL;
 
@@ -158,8 +187,19 @@ async function main(){
       const d = Math.sqrt(along*along + across*across);
       if (d >= 1) continue;
       const cover = d < 0.86 ? 1 : (1 - d) / 0.14;
-      openSky[k] *= (1 - cover * (1 - sp.tau));
+      cb(k, cover);
     }
+  }
+
+  function applyTree(t, growth){
+    const sp = t.sp;
+    const crown = sp.crown * growth;
+    const trunkH = sp.trunk * Math.max(growth, 0.3);
+    const crownCentreHeight = trunkH + (sp.height * growth - trunkH) * 0.55;
+    const r = Math.max(0.3, crown / 2);
+    forEachEllipseCell(t.x, t.z, crownCentreHeight, r, (k, cover) => {
+      openSky[k] *= (1 - cover * (1 - sp.tau));
+    });
   }
 
   function recomputeAll(){
@@ -169,14 +209,58 @@ async function main(){
     for (let k=0;k<NC;k++) shadeFrac[k] = 1 - openSky[k];
   }
 
-  // Blends from the real measured baseline toward the shaded endpoint by the
-  // marginal coverage NEW trees add. At f=0 (no new trees touching this cell)
-  // this returns the real measured Tmrt exactly, not a reconstruction.
+  // Existing-tree removal: a Set of `existingTrees` indices per scenario the
+  // user has removed (independent per scenario -- the two scenarios' tree
+  // lists don't correspond index-for-index). Uses the site's real canopy
+  // transmissivity (the value the actual SOLWEIG run used for every existing
+  // tree), not a species-specific one -- existing trees have no recorded
+  // species, just height/crown from CDSM peak detection.
+  const removedByScenario = {};
+  for (const name of scenarioNames) removedByScenario[name] = new Set();
+  const EXISTING_TREE_TAU = manifest.site.existingTreeTransmissivity;
+
+  // Only cells inside a removed tree's own shadow-casting footprint are ever
+  // touched -- everywhere else keeps the exact real measured tmrtBaseline, no
+  // reconstruction (same "not a reconstruction" guarantee tmrtAt already made
+  // for unplanted cells). For a touched cell, divide that tree's implied
+  // coverage back out of the cell's implied openSkyBase (the exact inverse of
+  // the "openSky *=" used to add a new tree's coverage in), clamp to a real
+  // openSky fraction (removing shade can cool a cell at most to its fully-
+  // sunlit endpoint, never past it), then re-derive Tmrt via the same flux
+  // blend. Overlapping removed trees on the same cell compose multiplicatively,
+  // matching CLAUDE.md's "combining shadows" rule.
+  function recomputeBaselineEff(){
+    const S = SCEN;
+    const out = Float32Array.from(S.tmrtBaseline);
+    const touched = new Map(); // cell index -> combined divisor factor
+    removedByScenario[scenarioName].forEach(i => {
+      const t = S.existingTrees[i];
+      forEachEllipseCell(t.cx, t.cz, t.height * 0.6, t.crown, (k, cover) => {
+        const factor = 1 - cover * (1 - EXISTING_TREE_TAU);
+        touched.set(k, (touched.get(k) || 1) * factor);
+      });
+    });
+    touched.forEach((factor, k) => {
+      if (factor <= 1e-3) return;
+      const openSkyAdj = Math.min(1, S.openSkyBase[k] / factor);
+      const f = Math.max(0, 1 - openSkyAdj);
+      const a = S.tmrtSun[k] + 273.15, b = S.tmrtShade[k] + 273.15;
+      const q = (1 - f) * a*a*a*a + f * b*b*b*b;
+      out[k] = Math.pow(q, 0.25) - 273.15;
+    });
+    S.tmrtBaselineEff = out;
+  }
+
+  // Blends from the effective baseline (real measured Tmrt, adjusted for any
+  // removed existing trees) toward the shaded endpoint by the marginal
+  // coverage NEW trees add. At f=0 with nothing removed this returns the real
+  // measured Tmrt exactly, not a reconstruction.
   function tmrtAt(k){
     const f = shadeFrac[k];
-    if (f <= 0) return SCEN.tmrtBaseline[k];
+    const base = SCEN.tmrtBaselineEff[k];
+    if (f <= 0) return base;
     if (f >= 1) return SCEN.tmrtShade[k];
-    const a = SCEN.tmrtBaseline[k] + 273.15, b = SCEN.tmrtShade[k] + 273.15;
+    const a = base + 273.15, b = SCEN.tmrtShade[k] + 273.15;
     const q = (1 - f) * a*a*a*a + f * b*b*b*b;
     return Math.pow(q, 0.25) - 273.15;
   }
@@ -265,15 +349,19 @@ async function main(){
 
   function rebuildExistingTrees(){
     const list = SCEN.existingTrees;
+    const removed = removedByScenario[scenarioName];
     const m = new THREE.Matrix4();
+    let n = 0;
     list.forEach((t, i) => {
+      if (removed.has(i)) return;
       const trunkH = Math.max(1, t.height * 0.3);
       m.makeScale(1, trunkH, 1).setPosition(t.cx, trunkH/2, t.cz);
-      exTrunk.setMatrixAt(i, m);
+      exTrunk.setMatrixAt(n, m);
       m.makeScale(t.crown, t.height * 0.6, t.crown).setPosition(t.cx, t.height * 0.6, t.cz);
-      exCrown.setMatrixAt(i, m);
+      exCrown.setMatrixAt(n, m);
+      n++;
     });
-    exTrunk.count = exCrown.count = list.length;
+    exTrunk.count = exCrown.count = n;
     exTrunk.instanceMatrix.needsUpdate = true;
     exCrown.instanceMatrix.needsUpdate = true;
   }
@@ -350,13 +438,17 @@ async function main(){
     // though it did (see s-shade / the hover readout for the actual local
     // effect). 3 decimals on the delta keeps it visible; plant more trees or
     // check "New shade" / hover the ground for a clearer signal on one tree.
+    // Deltas are relative to the real measured baseline, so both planting and
+    // removing existing trees move them -- keyed off either count, not just
+    // trees.length.
+    const changed = trees.length || removedByScenario[scenarioName].size;
     document.getElementById('s-trees').textContent = trees.length;
     document.getElementById('s-mean').innerHTML = s.mean.toFixed(1) + ' °C' +
-      (trees.length ? `<span class="delta">${(s.mean-baseMean).toFixed(3)}</span>` : '');
+      (changed ? `<span class="delta">${(s.mean-baseMean).toFixed(3)}</span>` : '');
     document.getElementById('s-extreme').innerHTML = f(s.extreme) +
-      (trees.length ? `<span class="delta">${((s.extreme-baseExtreme)*100).toFixed(2)}</span>` : '');
+      (changed ? `<span class="delta">${((s.extreme-baseExtreme)*100).toFixed(2)}</span>` : '');
     document.getElementById('s-severe').innerHTML = f(s.severe) +
-      (trees.length ? `<span class="delta">${((s.severe-baseSevere)*100).toFixed(2)}</span>` : '');
+      (changed ? `<span class="delta">${((s.severe-baseSevere)*100).toFixed(2)}</span>` : '');
     const area = (s.shaded - baseShaded) * groundCount * CELL * CELL;
     document.getElementById('s-shade').textContent = trees.length ? Math.round(area).toLocaleString() + ' m²' : '—';
     document.getElementById('undo').disabled = !trees.length;
@@ -390,6 +482,8 @@ async function main(){
     scenarioName = name;
     SCEN = scenarioData[name];
     rebuildExistingTrees();
+    recomputeBaselineEff();
+    updateRemovedCount();
     const b = computeBaseline();
     baseMean = b.mean; baseExtreme = b.extreme; baseSevere = b.severe; baseShaded = 0;
     refreshAll();
@@ -403,6 +497,7 @@ async function main(){
      ======================================================================= */
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
   let currentSpecies = SPECIES[0];
+  let tool = 'plant'; // 'plant' | 'remove'
 
   function plantAt(x, z){
     if (Math.abs(x) > WIDTH/2 - 2 || Math.abs(z) > HEIGHT/2 - 2) return;
@@ -418,6 +513,37 @@ async function main(){
   function undo(){ if (!trees.length) return; trees.pop(); refreshAll(); }
   function clearAll(){ trees.length = 0; refreshAll(); }
 
+  // Nearest existing tree to a click/hover point, within its own crown radius
+  // (min 2 m, so even a small crown stays clickable). Returns -1 if none.
+  function nearestExistingTree(x, z){
+    const list = SCEN.existingTrees;
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < list.length; i++) {
+      const t = list[i];
+      const d = Math.hypot(t.cx - x, t.cz - z);
+      const reach = Math.max(2, t.crown);
+      if (d <= reach && d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+  }
+
+  function updateRemovedCount(){
+    const n = removedByScenario[scenarioName].size;
+    document.getElementById('s-removed').textContent = n;
+    document.getElementById('restore-removed').disabled = !n;
+  }
+
+  function toggleRemoveAt(x, z){
+    const i = nearestExistingTree(x, z);
+    if (i < 0) return;
+    const removed = removedByScenario[scenarioName];
+    if (removed.has(i)) removed.delete(i); else removed.add(i);
+    rebuildExistingTrees();
+    recomputeBaselineEff();
+    refreshStats(paint());
+    updateRemovedCount();
+  }
+
   renderer.domElement.addEventListener('click', (e) => {
     if (mode !== 'plan') return;
     const r = renderer.domElement.getBoundingClientRect();
@@ -425,7 +551,9 @@ async function main(){
     ndc.y = -((e.clientY - r.top)/r.height)*2 + 1;
     ray.setFromCamera(ndc, camera);
     const hit = ray.intersectObject(groundMesh)[0];
-    if (hit) plantAt(hit.point.x, hit.point.z);
+    if (!hit) return;
+    if (tool === 'remove') toggleRemoveAt(hit.point.x, hit.point.z);
+    else plantAt(hit.point.x, hit.point.z);
   });
 
   // Hover readout: a single tree's effect on the site-wide average is real
@@ -441,6 +569,19 @@ async function main(){
     ray.setFromCamera(ndc, camera);
     const hit = ray.intersectObject(groundMesh)[0];
     if (!hit) { pointReadout.style.display = 'none'; return; }
+    if (tool === 'remove') {
+      const ti = nearestExistingTree(hit.point.x, hit.point.z);
+      if (ti < 0) { pointReadout.style.display = 'none'; return; }
+      const t = SCEN.existingTrees[ti];
+      const isRemoved = removedByScenario[scenarioName].has(ti);
+      pointReadout.style.left = e.clientX + 'px';
+      pointReadout.style.top = e.clientY + 'px';
+      pointReadout.style.display = 'block';
+      pointReadout.innerHTML = isRemoved
+        ? `<b>Removed</b><br>click to restore`
+        : `<b>${t.height.toFixed(1)} m tree</b><br>click to remove`;
+      return;
+    }
     const i = Math.floor((hit.point.x+WIDTH/2)/CELL), j = Math.floor((hit.point.z+HEIGHT/2)/CELL);
     if (i<0||i>=COLS||j<0||j>=ROWS) { pointReadout.style.display = 'none'; return; }
     const k = idx(i,j);
@@ -581,8 +722,30 @@ async function main(){
   document.getElementById('undo').onclick = undo;
   document.getElementById('clear').onclick = clearAll;
   addEventListener('keydown', e => {
-    if (mode === 'plan' && (e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); undo(); }
+    if (mode === 'plan' && tool === 'plant' && (e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); undo(); }
   });
+
+  const toolBtns = { plant: document.getElementById('t-plant'), remove: document.getElementById('t-remove') };
+  function setTool(next){
+    tool = next;
+    toolBtns.plant.setAttribute('aria-pressed', tool === 'plant');
+    toolBtns.remove.setAttribute('aria-pressed', tool === 'remove');
+    document.getElementById('plant-controls').style.display = tool === 'plant' ? '' : 'none';
+    document.getElementById('remove-note').style.display = tool === 'remove' ? '' : 'none';
+    document.getElementById('remove-controls').style.display = tool === 'remove' ? '' : 'none';
+    document.getElementById('hint').textContent = tool === 'plant'
+      ? 'Click the ground to plant · hover to inspect UTCI'
+      : 'Click an existing tree to remove it · click again to restore';
+  }
+  toolBtns.plant.onclick = () => setTool('plant');
+  toolBtns.remove.onclick = () => setTool('remove');
+  document.getElementById('restore-removed').onclick = () => {
+    removedByScenario[scenarioName].clear();
+    rebuildExistingTrees();
+    recomputeBaselineEff();
+    refreshStats(paint());
+    updateRemovedCount();
+  };
 
   const uncBtn = document.getElementById('toggle-uncertainty');
   uncBtn.onclick = () => {

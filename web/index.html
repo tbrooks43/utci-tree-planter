@@ -117,18 +117,36 @@
       <button id="m-plan" aria-pressed="true">Plan</button>
       <button id="m-walk" aria-pressed="false">Walk</button>
     </div>
-    <label class="field" for="species">Species</label>
-    <select id="species"></select>
-    <div class="specs mono" id="specs"></div>
 
-    <div class="field-row"><label class="field" for="years" style="margin:0">Years since planting</label>
-      <span class="val mono" id="years-val">0</span></div>
-    <input type="range" id="years" min="0" max="15" step="1" value="0">
-
-    <div class="row" style="margin-top:12px">
-      <button class="btn" id="undo" disabled>Undo</button>
-      <button class="btn" id="clear" disabled>Clear all</button>
+    <div class="seg" role="group" aria-label="Tool" style="margin-bottom:12px">
+      <button id="t-plant" aria-pressed="true">Plant</button>
+      <button id="t-remove" aria-pressed="false">Remove</button>
     </div>
+
+    <div id="plant-controls">
+      <label class="field" for="species">Species</label>
+      <select id="species"></select>
+      <div class="specs mono" id="specs"></div>
+
+      <div class="field-row"><label class="field" for="years" style="margin:0">Years since planting</label>
+        <span class="val mono" id="years-val">0</span></div>
+      <input type="range" id="years" min="0" max="15" step="1" value="0">
+
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="undo" disabled>Undo</button>
+        <button class="btn" id="clear" disabled>Clear all</button>
+      </div>
+    </div>
+
+    <p class="note" id="remove-note" style="display:none;margin:0 0 12px">
+      Click an existing tree to remove it, click again to restore it. Removal is
+      backed out of the same sun/shade endpoint fields used for planting — see
+      the README for how, and its extra uncertainty vs. planting new trees.
+    </p>
+    <div class="row" id="remove-controls" style="display:none;margin-bottom:12px">
+      <button class="btn" id="restore-removed" disabled>Restore removed</button>
+    </div>
+
     <div class="row" style="margin-top:8px">
       <button class="btn" id="toggle-uncertainty" aria-pressed="false">Show uncertainty</button>
     </div>
@@ -143,6 +161,7 @@
   <h2>Effect at <span id="hour-label"></span></h2>
   <div class="body">
     <div class="stat"><span>Trees planted</span><b class="mono" id="s-trees">0</b></div>
+    <div class="stat"><span>Existing trees removed</span><b class="mono" id="s-removed">0</b></div>
     <div class="stat"><span>Mean UTCI</span><b class="mono" id="s-mean">—</b></div>
     <div class="stat"><span>Above 46 °C</span><b class="mono" id="s-extreme">—</b></div>
     <div class="stat"><span>Above 38 °C</span><b class="mono" id="s-severe">—</b></div>
@@ -176,4 +195,4 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="main.js?v=11"></script>
+<script src="main.js?v=12"></script>
