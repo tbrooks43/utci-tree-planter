@@ -371,32 +371,58 @@ async function main(){
   const trunkMesh = new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.18, 0.26, 1, 6),
     new THREE.MeshLambertMaterial({ color:0x4a3f33 }), MAX_TREES);
-  const crownMesh = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(1, 12, 9),
-    new THREE.MeshLambertMaterial({ color:0xffffff, vertexColors:true }), MAX_TREES);
-  crownMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_TREES*3), 3);
-  trunkMesh.count = crownMesh.count = 0;
-  scene.add(trunkMesh, crownMesh);
+  trunkMesh.count = 0;
+  scene.add(trunkMesh);
+
+  // One InstancedMesh per species for tree crowns, each with its own flat
+  // material.color (sp.leaf), instead of a single shared mesh relying on
+  // per-instance vertex/instanceColor. Per-instance color on non-Basic
+  // materials needs three.js r131+ and can silently render solid black on
+  // older builds (or if the color buffer isn't wired up right) even though
+  // per-instance matrices/sizing still work fine -- this sidesteps that
+  // failure mode entirely, at the cost of one InstancedMesh per species.
+  const crownGeo = new THREE.SphereGeometry(1, 12, 9);
+  const crownMeshBySpecies = {};
+  SPECIES.forEach(sp => {
+    const mesh = new THREE.InstancedMesh(crownGeo, new THREE.MeshLambertMaterial({ color: sp.leaf }), MAX_TREES);
+    mesh.count = 0;
+    crownMeshBySpecies[sp.id] = mesh;
+    scene.add(mesh);
+  });
 
   function rebuildTreeMeshes(){
     const growth = growthFraction(Number(yearsInput.value));
     const m = new THREE.Matrix4();
+
+    // per-species instance counters -- a tree's index within its species'
+    // InstancedMesh is NOT the same as its index in `trees` (that array mixes
+    // species), so each species pool tracks its own running count.
+    const speciesIndex = {};
+    SPECIES.forEach(sp => { speciesIndex[sp.id] = 0; });
+
     trees.forEach((t, i) => {
       const sp = t.sp;
       const trunkH = Math.max(0.3, sp.trunk * Math.max(growth, 0.3));
       const crownR = Math.max(0.3, sp.crown * growth / 2);
       const crownY = trunkH + (sp.height * growth - trunkH) * 0.55;
+
       m.makeScale(1, trunkH, 1).setPosition(t.x, trunkH/2, t.z);
       trunkMesh.setMatrixAt(i, m);
+
+      const crownMesh = crownMeshBySpecies[sp.id];
+      const ci = speciesIndex[sp.id]++;
       m.makeScale(crownR, Math.max(0.3, (sp.height - sp.trunk) * growth * 0.62), crownR).setPosition(t.x, crownY, t.z);
-      crownMesh.setMatrixAt(i, m);
-      const c = new THREE.Color(sp.leaf);
-      crownMesh.instanceColor.setXYZ(i, c.r, c.g, c.b);
+      crownMesh.setMatrixAt(ci, m);
     });
-    trunkMesh.count = crownMesh.count = trees.length;
+
+    trunkMesh.count = trees.length;
     trunkMesh.instanceMatrix.needsUpdate = true;
-    crownMesh.instanceMatrix.needsUpdate = true;
-    crownMesh.instanceColor.needsUpdate = true;
+
+    SPECIES.forEach(sp => {
+      const mesh = crownMeshBySpecies[sp.id];
+      mesh.count = speciesIndex[sp.id];
+      mesh.instanceMatrix.needsUpdate = true;
+    });
   }
 
   /* ==========================================================================
