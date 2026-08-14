@@ -469,6 +469,17 @@ async function main(){
     // trees.length.
     const changed = trees.length || removedByScenario[scenarioName].size;
     document.getElementById('s-trees').textContent = trees.length;
+
+    const counts = {};
+    SPECIES.forEach(sp => counts[sp.id] = 0);
+    for (const t of trees) {
+      counts[t.sp.id]++;
+    }
+    SPECIES.forEach(sp => {
+      const el = document.getElementById(`s-trees-${sp.id}`);
+      if (el) el.textContent = counts[sp.id];
+    });
+
     document.getElementById('s-mean').innerHTML = s.mean.toFixed(1) + ' °C' +
       (changed ? `<span class="delta">${(s.mean-baseMean).toFixed(3)}</span>` : '');
     document.getElementById('s-extreme').innerHTML = f(s.extreme) +
@@ -807,6 +818,34 @@ async function main(){
      ======================================================================= */
   const sel = document.getElementById('species');
   SPECIES.forEach(s => sel.add(new Option(s.name, s.id)));
+
+  /*
+  const speciesCountsContainer = document.getElementById('species-counts');
+  if (speciesCountsContainer) {
+    SPECIES.forEach(sp => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'stat';
+      wrapper.style.paddingLeft = '12px';
+      wrapper.style.borderBottom = 'none';
+      // wrapper.style.fontSize = '0.9em';
+      wrapper.innerHTML = `<span>${sp.name}</span><b class="mono" id="s-trees-${sp.id}">0</b>`;
+      speciesCountsContainer.appendChild(wrapper);
+    });
+  }
+  */
+ const speciesCountsContainer = document.getElementById('species-counts');
+  if (speciesCountsContainer) {
+    SPECIES.forEach(sp => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'stat'; // Use the existing CSS layout!
+      wrapper.style.paddingLeft = '12px'; // Indent slightly to look like a sub-list
+      wrapper.style.borderBottom = 'none'; // Remove borders between individual species
+      
+      // Format to perfectly match the other labels and numbers
+      wrapper.innerHTML = `<span>${sp.name}</span><b class="mono" id="s-trees-${sp.id}">0</b>`;
+      speciesCountsContainer.appendChild(wrapper);
+    });
+  }
   function showSpecs(){
     const s = currentSpecies;
     document.getElementById('specs').innerHTML =
