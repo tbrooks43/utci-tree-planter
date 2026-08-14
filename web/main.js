@@ -581,6 +581,16 @@ async function main(){
     updateRemovedCount();
   }
 
+  const hoverRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.85, 1, 32),
+    new THREE.MeshBasicMaterial({ color:0xffcc33, side:THREE.DoubleSide, transparent:true,
+      opacity:0.9, depthTest:false, fog:false})
+  );
+  hoverRing.rotation.x = -Math.PI / 2;
+  hoverRing.renderOrder = 999;
+  hoverRing.visible = false;
+  scene.add(hoverRing);
+
   renderer.domElement.addEventListener('click', (e) => {
     if (mode !== 'plan') return;
     const r = renderer.domElement.getBoundingClientRect();
@@ -589,7 +599,15 @@ async function main(){
     ray.setFromCamera(ndc, camera);
     const hit = ray.intersectObject(groundMesh)[0];
     if (!hit) return;
-    if (tool === 'remove') toggleRemoveAt(hit.point.x, hit.point.z);
+    if (tool === 'remove') {
+      toggleRemoveAt(hit.point.x, hit.point.z);
+      //hoverRing.material.color.set(isRemoved ? 0xff5544 : 0xffcc33);
+      if (hoverRing.material.color.getHex() === 0xffcc33) {
+        hoverRing.material.color.set(0xff5544);
+      } else if (hoverRing.material.color.getHex() === 0xff5544) {
+        hoverRing.material.color.set(0xffcc33);
+      }
+    }
     else plantAt(hit.point.x, hit.point.z);
   });
 
@@ -597,20 +615,43 @@ async function main(){
   // but tiny (see refreshStats comment) -- this shows the exact local UTCI
   // at the cursor so a single planting's effect is directly visible, not
   // diluted into a site-wide mean.
+  // Hover highlight fo the remove tool: a flat ring on the ground under
+  // whichever existing tree the cursor is currently over (nearestExistingTree
+  // result), so it's clear which tree a click will act on.
+  // depthTest:false + high renderOrder keeps it visible through canopy/ground
+  // overlap rather than fighting z-buffer precision at this scale
+  /*
+  const hoverRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.85, 1, 32),
+    new THREE.MeshBasicMaterial({ color:0xffcc33, side:THREE.DoubleSide, transparent:true,
+      opacity:0.9, depthTest:false, fog:false})
+  );
+  hoverRing.rotation.x = -Math.PI / 2;
+  hoverRing.renderOrder = 999;
+  hoverRing.visible = false;
+  scene.add(hoverRing);
+  */
+
   const pointReadout = document.getElementById('point-readout');
   renderer.domElement.addEventListener('mousemove', (e) => {
-    if (mode !== 'plan' || dragging) { pointReadout.style.display = 'none'; return; }
+    if (mode !== 'plan' || dragging) { pointReadout.style.display = 'none'; hoverRing.visible 
+      = false; return; }
     const r = renderer.domElement.getBoundingClientRect();
     ndc.x = ((e.clientX - r.left)/r.width)*2 - 1;
     ndc.y = -((e.clientY - r.top)/r.height)*2 + 1;
     ray.setFromCamera(ndc, camera);
     const hit = ray.intersectObject(groundMesh)[0];
-    if (!hit) { pointReadout.style.display = 'none'; return; }
+    if (!hit) { pointReadout.style.display = 'none'; hoverRing.visible = false; return; }
     if (tool === 'remove') {
       const ti = nearestExistingTree(hit.point.x, hit.point.z);
-      if (ti < 0) { pointReadout.style.display = 'none'; return; }
+      if (ti < 0) { pointReadout.style.display = 'none'; hoverRing.visible = false; return; }
       const t = SCEN.existingTrees[ti];
       const isRemoved = removedByScenario[scenarioName].has(ti);
+      hoverRing.visible = true;
+      hoverRing.position.set(t.cx, 0.08, t.cz);
+      const reach = Math.max(2, t.crown); // Matches nearestExistingTree's own reach radius
+      hoverRing.scale.set(reach, reach, 1);
+      hoverRing.material.color.set(isRemoved ? 0xff5544 : 0xffcc33);
       pointReadout.style.left = e.clientX + 'px';
       pointReadout.style.top = e.clientY + 'px';
       pointReadout.style.display = 'block';
@@ -619,6 +660,7 @@ async function main(){
         : `<b>${t.height.toFixed(1)} m tree</b><br>click to remove`;
       return;
     }
+    hoverRing.visible = false;
     const i = Math.floor((hit.point.x+WIDTH/2)/CELL), j = Math.floor((hit.point.z+HEIGHT/2)/CELL);
     if (i<0||i>=COLS||j<0||j>=ROWS) { pointReadout.style.display = 'none'; return; }
     const k = idx(i,j);
@@ -629,7 +671,8 @@ async function main(){
     pointReadout.style.display = 'block';
     pointReadout.innerHTML = `<b>${u.toFixed(1)} °C</b><br>${band.label}`;
   });
-  renderer.domElement.addEventListener('mouseleave', () => { pointReadout.style.display = 'none'; });
+  renderer.domElement.addEventListener('mouseleave', () => { pointReadout.style.display = 'none';
+    hoverRing.visible = false; });
 
   // Plan-view orbit
   let dragging = false, lastX = 0, lastY = 0, orbitYaw = 0.72, orbitPitch = 0.82, orbitDist = diag * 0.85;
@@ -739,6 +782,7 @@ async function main(){
   function setMode(next){
     mode = next;
     const plan = next === 'plan';
+    if (!plan) hoverRing.visible = false;
     camera = plan ? planCam : walkCam;
     document.getElementById('m-plan').setAttribute('aria-pressed', plan);
     document.getElementById('m-walk').setAttribute('aria-pressed', !plan);
@@ -872,6 +916,7 @@ async function main(){
   const toolBtns = { plant: document.getElementById('t-plant'), remove: document.getElementById('t-remove') };
   function setTool(next){
     tool = next;
+    if (tool !== 'remove') hoverRing.visible = false;
     toolBtns.plant.setAttribute('aria-pressed', tool === 'plant');
     toolBtns.remove.setAttribute('aria-pressed', tool === 'remove');
     document.getElementById('plant-controls').style.display = tool === 'plant' ? '' : 'none';
