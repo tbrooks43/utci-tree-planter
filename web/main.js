@@ -581,6 +581,11 @@ async function main(){
     updateRemovedCount();
   }
 
+  // Hover highlight fo the remove tool: a flat ring on the ground under
+  // whichever existing tree the cursor is currently over (nearestExistingTree
+  // result), so it's clear which tree a click will act on.
+  // depthTest:false + high renderOrder keeps it visible through canopy/ground
+  // overlap rather than fighting z-buffer precision at this scale
   const hoverRing = new THREE.Mesh(
     new THREE.RingGeometry(0.85, 1, 32),
     new THREE.MeshBasicMaterial({ color:0xffcc33, side:THREE.DoubleSide, transparent:true,
@@ -600,12 +605,15 @@ async function main(){
     const hit = ray.intersectObject(groundMesh)[0];
     if (!hit) return;
     if (tool === 'remove') {
+      const ti = nearestExistingTree(hit.point.x, hit.point.z);
       toggleRemoveAt(hit.point.x, hit.point.z);
-      //hoverRing.material.color.set(isRemoved ? 0xff5544 : 0xffcc33);
-      if (hoverRing.material.color.getHex() === 0xffcc33) {
-        hoverRing.material.color.set(0xff5544);
-      } else if (hoverRing.material.color.getHex() === 0xff5544) {
-        hoverRing.material.color.set(0xffcc33);
+      if (ti >= 0) {
+        const t = SCEN.existingTrees[ti];
+        const isRemoved = removedByScenario[scenarioName].has(ti);
+        hoverRing.material.color.set(isRemoved ? 0xff5544 : 0xffcc33);
+        pointReadout.innerHTML = isRemoved
+          ? `<b>Removed</b><br>click to restore`
+          : `<b>${t.height.toFixed(1)} m tree</b><br>click to remove`;
       }
     }
     else plantAt(hit.point.x, hit.point.z);
@@ -615,22 +623,6 @@ async function main(){
   // but tiny (see refreshStats comment) -- this shows the exact local UTCI
   // at the cursor so a single planting's effect is directly visible, not
   // diluted into a site-wide mean.
-  // Hover highlight fo the remove tool: a flat ring on the ground under
-  // whichever existing tree the cursor is currently over (nearestExistingTree
-  // result), so it's clear which tree a click will act on.
-  // depthTest:false + high renderOrder keeps it visible through canopy/ground
-  // overlap rather than fighting z-buffer precision at this scale
-  /*
-  const hoverRing = new THREE.Mesh(
-    new THREE.RingGeometry(0.85, 1, 32),
-    new THREE.MeshBasicMaterial({ color:0xffcc33, side:THREE.DoubleSide, transparent:true,
-      opacity:0.9, depthTest:false, fog:false})
-  );
-  hoverRing.rotation.x = -Math.PI / 2;
-  hoverRing.renderOrder = 999;
-  hoverRing.visible = false;
-  scene.add(hoverRing);
-  */
 
   const pointReadout = document.getElementById('point-readout');
   renderer.domElement.addEventListener('mousemove', (e) => {
@@ -863,21 +855,7 @@ async function main(){
   const sel = document.getElementById('species');
   SPECIES.forEach(s => sel.add(new Option(s.name, s.id)));
 
-  /*
   const speciesCountsContainer = document.getElementById('species-counts');
-  if (speciesCountsContainer) {
-    SPECIES.forEach(sp => {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'stat';
-      wrapper.style.paddingLeft = '12px';
-      wrapper.style.borderBottom = 'none';
-      // wrapper.style.fontSize = '0.9em';
-      wrapper.innerHTML = `<span>${sp.name}</span><b class="mono" id="s-trees-${sp.id}">0</b>`;
-      speciesCountsContainer.appendChild(wrapper);
-    });
-  }
-  */
- const speciesCountsContainer = document.getElementById('species-counts');
   if (speciesCountsContainer) {
     SPECIES.forEach(sp => {
       const wrapper = document.createElement('div');
