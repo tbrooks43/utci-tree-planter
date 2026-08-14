@@ -709,8 +709,12 @@ async function main(){
   // stepPlanPan only runs while mode === 'plan' and stepWalk only while
   // mode === 'walk', so the two never read the held keys at the same time.
   const PAN_SPEED = 1; // fraction of orbitDist covered per second at full speed
+  const YAW_SPEED = 1.4; // radians per second at full speed
   function stepPlanPan(dt){
    
+   if (keys.KeyQ) orbitYaw += YAW_SPEED * dt;
+   if (keys.KeyE) orbitYaw -= YAW_SPEED * dt;
+
    const forward = new THREE.Vector3();
    const right = new THREE.Vector3();
 
