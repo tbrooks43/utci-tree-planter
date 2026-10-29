@@ -371,32 +371,58 @@ async function main(){
   const trunkMesh = new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.18, 0.26, 1, 6),
     new THREE.MeshLambertMaterial({ color:0x4a3f33 }), MAX_TREES);
-  const crownMesh = new THREE.InstancedMesh(
-    new THREE.SphereGeometry(1, 12, 9),
-    new THREE.MeshLambertMaterial({ color:0xffffff, vertexColors:true }), MAX_TREES);
-  crownMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_TREES*3), 3);
-  trunkMesh.count = crownMesh.count = 0;
-  scene.add(trunkMesh, crownMesh);
+  trunkMesh.count = 0;
+  scene.add(trunkMesh);
+
+  // One InstancedMesh per species for tree crowns, each with its own flat
+  // material.color (sp.leaf), instead of a single shared mesh relying on
+  // per-instance vertex/instanceColor. Per-instance color on non-Basic
+  // materials needs three.js r131+ and can silently render solid black on
+  // older builds (or if the color buffer isn't wired up right) even though
+  // per-instance matrices/sizing still work fine -- this sidesteps that
+  // failure mode entirely, at the cost of one InstancedMesh per species.
+  const crownGeo = new THREE.SphereGeometry(1, 12, 9);
+  const crownMeshBySpecies = {};
+  SPECIES.forEach(sp => {
+    const mesh = new THREE.InstancedMesh(crownGeo, new THREE.MeshLambertMaterial({ color: sp.leaf }), MAX_TREES);
+    mesh.count = 0;
+    crownMeshBySpecies[sp.id] = mesh;
+    scene.add(mesh);
+  });
 
   function rebuildTreeMeshes(){
     const growth = growthFraction(Number(yearsInput.value));
     const m = new THREE.Matrix4();
+
+    // per-species instance counters -- a tree's index within its species'
+    // InstancedMesh is NOT the same as its index in `trees` (that array mixes
+    // species), so each species pool tracks its own running count.
+    const speciesIndex = {};
+    SPECIES.forEach(sp => { speciesIndex[sp.id] = 0; });
+
     trees.forEach((t, i) => {
       const sp = t.sp;
       const trunkH = Math.max(0.3, sp.trunk * Math.max(growth, 0.3));
       const crownR = Math.max(0.3, sp.crown * growth / 2);
       const crownY = trunkH + (sp.height * growth - trunkH) * 0.55;
+
       m.makeScale(1, trunkH, 1).setPosition(t.x, trunkH/2, t.z);
       trunkMesh.setMatrixAt(i, m);
+
+      const crownMesh = crownMeshBySpecies[sp.id];
+      const ci = speciesIndex[sp.id]++;
       m.makeScale(crownR, Math.max(0.3, (sp.height - sp.trunk) * growth * 0.62), crownR).setPosition(t.x, crownY, t.z);
-      crownMesh.setMatrixAt(i, m);
-      const c = new THREE.Color(sp.leaf);
-      crownMesh.instanceColor.setXYZ(i, c.r, c.g, c.b);
+      crownMesh.setMatrixAt(ci, m);
     });
-    trunkMesh.count = crownMesh.count = trees.length;
+
+    trunkMesh.count = trees.length;
     trunkMesh.instanceMatrix.needsUpdate = true;
-    crownMesh.instanceMatrix.needsUpdate = true;
-    crownMesh.instanceColor.needsUpdate = true;
+
+    SPECIES.forEach(sp => {
+      const mesh = crownMeshBySpecies[sp.id];
+      mesh.count = speciesIndex[sp.id];
+      mesh.instanceMatrix.needsUpdate = true;
+    });
   }
 
   /* ==========================================================================
@@ -443,6 +469,17 @@ async function main(){
     // trees.length.
     const changed = trees.length || removedByScenario[scenarioName].size;
     document.getElementById('s-trees').textContent = trees.length;
+
+    const counts = {};
+    SPECIES.forEach(sp => counts[sp.id] = 0);
+    for (const t of trees) {
+      counts[t.sp.id]++;
+    }
+    SPECIES.forEach(sp => {
+      const el = document.getElementById(`s-trees-${sp.id}`);
+      if (el) el.textContent = counts[sp.id];
+    });
+
     document.getElementById('s-mean').innerHTML = s.mean.toFixed(1) + ' °C' +
       (changed ? `<span class="delta">${(s.mean-baseMean).toFixed(3)}</span>` : '');
     document.getElementById('s-extreme').innerHTML = f(s.extreme) +
@@ -544,6 +581,21 @@ async function main(){
     updateRemovedCount();
   }
 
+  // Hover highlight fo the remove tool: a flat ring on the ground under
+  // whichever existing tree the cursor is currently over (nearestExistingTree
+  // result), so it's clear which tree a click will act on.
+  // depthTest:false + high renderOrder keeps it visible through canopy/ground
+  // overlap rather than fighting z-buffer precision at this scale
+  const hoverRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.85, 1, 32),
+    new THREE.MeshBasicMaterial({ color:0xffcc33, side:THREE.DoubleSide, transparent:true,
+      opacity:0.9, depthTest:false, fog:false})
+  );
+  hoverRing.rotation.x = -Math.PI / 2;
+  hoverRing.renderOrder = 999;
+  hoverRing.visible = false;
+  scene.add(hoverRing);
+
   renderer.domElement.addEventListener('click', (e) => {
     if (mode !== 'plan') return;
     const r = renderer.domElement.getBoundingClientRect();
@@ -552,7 +604,18 @@ async function main(){
     ray.setFromCamera(ndc, camera);
     const hit = ray.intersectObject(groundMesh)[0];
     if (!hit) return;
-    if (tool === 'remove') toggleRemoveAt(hit.point.x, hit.point.z);
+    if (tool === 'remove') {
+      const ti = nearestExistingTree(hit.point.x, hit.point.z);
+      toggleRemoveAt(hit.point.x, hit.point.z);
+      if (ti >= 0) {
+        const t = SCEN.existingTrees[ti];
+        const isRemoved = removedByScenario[scenarioName].has(ti);
+        hoverRing.material.color.set(isRemoved ? 0xff5544 : 0xffcc33);
+        pointReadout.innerHTML = isRemoved
+          ? `<b>Removed</b><br>click to restore`
+          : `<b>${t.height.toFixed(1)} m tree</b><br>click to remove`;
+      }
+    }
     else plantAt(hit.point.x, hit.point.z);
   });
 
@@ -560,20 +623,27 @@ async function main(){
   // but tiny (see refreshStats comment) -- this shows the exact local UTCI
   // at the cursor so a single planting's effect is directly visible, not
   // diluted into a site-wide mean.
+
   const pointReadout = document.getElementById('point-readout');
   renderer.domElement.addEventListener('mousemove', (e) => {
-    if (mode !== 'plan' || dragging) { pointReadout.style.display = 'none'; return; }
+    if (mode !== 'plan' || dragging) { pointReadout.style.display = 'none'; hoverRing.visible 
+      = false; return; }
     const r = renderer.domElement.getBoundingClientRect();
     ndc.x = ((e.clientX - r.left)/r.width)*2 - 1;
     ndc.y = -((e.clientY - r.top)/r.height)*2 + 1;
     ray.setFromCamera(ndc, camera);
     const hit = ray.intersectObject(groundMesh)[0];
-    if (!hit) { pointReadout.style.display = 'none'; return; }
+    if (!hit) { pointReadout.style.display = 'none'; hoverRing.visible = false; return; }
     if (tool === 'remove') {
       const ti = nearestExistingTree(hit.point.x, hit.point.z);
-      if (ti < 0) { pointReadout.style.display = 'none'; return; }
+      if (ti < 0) { pointReadout.style.display = 'none'; hoverRing.visible = false; return; }
       const t = SCEN.existingTrees[ti];
       const isRemoved = removedByScenario[scenarioName].has(ti);
+      hoverRing.visible = true;
+      hoverRing.position.set(t.cx, 0.08, t.cz);
+      const reach = Math.max(2, t.crown); // Matches nearestExistingTree's own reach radius
+      hoverRing.scale.set(reach, reach, 1);
+      hoverRing.material.color.set(isRemoved ? 0xff5544 : 0xffcc33);
       pointReadout.style.left = e.clientX + 'px';
       pointReadout.style.top = e.clientY + 'px';
       pointReadout.style.display = 'block';
@@ -582,6 +652,7 @@ async function main(){
         : `<b>${t.height.toFixed(1)} m tree</b><br>click to remove`;
       return;
     }
+    hoverRing.visible = false;
     const i = Math.floor((hit.point.x+WIDTH/2)/CELL), j = Math.floor((hit.point.z+HEIGHT/2)/CELL);
     if (i<0||i>=COLS||j<0||j>=ROWS) { pointReadout.style.display = 'none'; return; }
     const k = idx(i,j);
@@ -592,10 +663,12 @@ async function main(){
     pointReadout.style.display = 'block';
     pointReadout.innerHTML = `<b>${u.toFixed(1)} °C</b><br>${band.label}`;
   });
-  renderer.domElement.addEventListener('mouseleave', () => { pointReadout.style.display = 'none'; });
+  renderer.domElement.addEventListener('mouseleave', () => { pointReadout.style.display = 'none';
+    hoverRing.visible = false; });
 
   // Plan-view orbit
   let dragging = false, lastX = 0, lastY = 0, orbitYaw = 0.72, orbitPitch = 0.82, orbitDist = diag * 0.85;
+  const orbitTarget = new THREE.Vector3(0, 0, 0); // WASD-panned pivot points
   renderer.domElement.addEventListener('pointerdown', e => {
     if (mode !== 'plan') return;
     dragging = true; lastX = e.clientX; lastY = e.clientY;
@@ -619,12 +692,70 @@ async function main(){
     placeOrbit();
   }, { passive:false });
 
+  
+
   function placeOrbit(){
     planCam.position.set(
-      Math.sin(orbitYaw)*Math.cos(orbitPitch)*orbitDist,
-      Math.sin(orbitPitch)*orbitDist,
-      Math.cos(orbitYaw)*Math.cos(orbitPitch)*orbitDist);
-    planCam.lookAt(0, 0, 0);
+      orbitTarget.x + Math.sin(orbitYaw)*Math.cos(orbitPitch)*orbitDist,
+      orbitTarget.y + Math.sin(orbitPitch)*orbitDist,
+      orbitTarget.z + Math.cos(orbitYaw)*Math.cos(orbitPitch)*orbitDist);
+    planCam.lookAt(orbitTarget);
+  }
+
+  // WASD panning in plan mode: moves orbitTarget across the ground plane,
+  // relative to the camera's current yaw (W = "into the screen" at whatever
+  // angle you're currently looking from, not fixed to world Z). Shares the
+  // same `keys` state that drives walk-mode movement below -- safe since
+  // stepPlanPan only runs while mode === 'plan' and stepWalk only while
+  // mode === 'walk', so the two never read the held keys at the same time.
+  const PAN_SPEED = 1; // fraction of orbitDist covered per second at full speed
+  const YAW_SPEED = 1.4; // radians per second at full speed
+  function stepPlanPan(dt){
+   
+   if (keys.KeyQ) orbitYaw += YAW_SPEED * dt;
+   if (keys.KeyE) orbitYaw -= YAW_SPEED * dt;
+
+   const forward = new THREE.Vector3();
+   const right = new THREE.Vector3();
+
+   // Get forward direction from camera
+   planCam.getWorldDirection(forward);
+   forward.y = 0; // Prevents up/down movement
+   forward.normalize();
+
+   // Get right direction from forward vector
+   right.crossVectors(forward, planCam.up).normalize();
+
+   const moveVec = new THREE.Vector3();
+
+   // Move forward/backward
+   if (keys.KeyW || keys.ArrowUp) {
+    planCam.position.add(forward.clone().multiplyScalar(PAN_SPEED));
+    moveVec.add(forward);
+   }
+   if (keys.KeyS || keys.ArrowDown) {
+    planCam.position.add(forward.clone().multiplyScalar(-PAN_SPEED));
+    moveVec.sub(forward);
+   }
+   // Move Left/Right
+   if (keys.KeyA || keys.ArrowLeft) {
+    planCam.position.add(right.clone().multiplyScalar(-PAN_SPEED));
+    moveVec.sub(right);
+   }
+   if (keys.KeyD || keys.ArrowRight) {
+    planCam.position.add(right.clone().multiplyScalar(PAN_SPEED));
+    moveVec.add(right);
+   }
+
+   if (moveVec.lengthSq() > 0) {
+    moveVec.normalize();
+   }
+
+   const speed = PAN_SPEED * orbitDist * dt;
+   moveVec.multiplyScalar(speed);
+
+   orbitTarget.add(moveVec);
+   placeOrbit();
   }
 
   // Walk mode
@@ -647,6 +778,7 @@ async function main(){
   function setMode(next){
     mode = next;
     const plan = next === 'plan';
+    if (!plan) hoverRing.visible = false;
     camera = plan ? planCam : walkCam;
     document.getElementById('m-plan').setAttribute('aria-pressed', plan);
     document.getElementById('m-walk').setAttribute('aria-pressed', !plan);
@@ -669,25 +801,49 @@ async function main(){
   }
 
   function stepWalk(dt){
+    // Start with updating camera to ensure getWorldDirection is up to date
+    walkCam.rotation.set(walkPitch, walkYaw, 0, 'YXZ');
+
     const speed = (keys.ShiftLeft ? 11 : 4.6) * dt;
-    let fx = 0, fz = 0;
-    if (keys.KeyW || keys.ArrowUp)    fz -= 1;
-    if (keys.KeyS || keys.ArrowDown)  fz += 1;
-    if (keys.KeyA || keys.ArrowLeft)  fx -= 1;
-    if (keys.KeyD || keys.ArrowRight) fx += 1;
-    if (fx || fz) {
-      const len = Math.hypot(fx, fz);
-      const sin = Math.sin(walkYaw), cos = Math.cos(walkYaw);
-      const dx = ((fx*cos - fz*sin)/len)*speed, dz = ((fx*sin + fz*cos)/len)*speed;
-      const nx = walkPos.x + dx, nz = walkPos.z + dz;
+
+    const forward = new THREE.Vector3();
+    const right = new THREE.Vector3();
+
+    // Get forward direction from camera
+    walkCam.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+    // Get right direction from forward vector
+    right.crossVectors(forward, walkCam.up).normalize();
+
+    const moveVec = new THREE.Vector3();
+
+    // Movement
+    if (keys.KeyW || keys.ArrowUp) moveVec.add(forward);
+    if (keys.KeyS || keys.ArrowDown) moveVec.sub(forward);
+    if (keys.KeyA || keys.ArrowLeft) moveVec.sub(right);
+    if (keys.KeyD || keys.ArrowRight) moveVec.add(right);
+
+    // Apply movement vector
+    if (moveVec.lengthSq() > 0) {
+      moveVec.normalize();
+      moveVec.multiplyScalar(speed);
+
+      const nx = walkPos.x + moveVec.x;
+      const nz = walkPos.z + moveVec.z;
+
+      // Handle collision
       if (!blocked(nx, walkPos.z)) walkPos.x = nx;
       if (!blocked(walkPos.x, nz)) walkPos.z = nz;
+
       walkPos.x = Math.max(-WIDTH/2+1, Math.min(WIDTH/2-1, walkPos.x));
       walkPos.z = Math.max(-HEIGHT/2+1, Math.min(HEIGHT/2-1, walkPos.z));
     }
-    walkCam.position.copy(walkPos);
-    walkCam.rotation.set(walkPitch, walkYaw, 0, 'YXZ');
 
+    // Update camera to match updated walkPos
+    walkCam.position.copy(walkPos);
+
+    // UTCI readout
     const i = Math.floor((walkPos.x+WIDTH/2)/CELL), j = Math.floor((walkPos.z+HEIGHT/2)/CELL);
     const k = idx(Math.max(0,Math.min(COLS-1,i)), Math.max(0,Math.min(ROWS-1,j)));
     const u = SCEN.utciFromTmrt(tmrtAt(k)), band = bandFor(u);
@@ -702,6 +858,20 @@ async function main(){
      ======================================================================= */
   const sel = document.getElementById('species');
   SPECIES.forEach(s => sel.add(new Option(s.name, s.id)));
+
+  const speciesCountsContainer = document.getElementById('species-counts');
+  if (speciesCountsContainer) {
+    SPECIES.forEach(sp => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'stat'; // Use the existing CSS layout!
+      wrapper.style.paddingLeft = '12px'; // Indent slightly to look like a sub-list
+      wrapper.style.borderBottom = 'none'; // Remove borders between individual species
+      
+      // Format to perfectly match the other labels and numbers
+      wrapper.innerHTML = `<span>${sp.name}</span><b class="mono" id="s-trees-${sp.id}">0</b>`;
+      speciesCountsContainer.appendChild(wrapper);
+    });
+  }
   function showSpecs(){
     const s = currentSpecies;
     document.getElementById('specs').innerHTML =
@@ -728,6 +898,7 @@ async function main(){
   const toolBtns = { plant: document.getElementById('t-plant'), remove: document.getElementById('t-remove') };
   function setTool(next){
     tool = next;
+    if (tool !== 'remove') hoverRing.visible = false;
     toolBtns.plant.setAttribute('aria-pressed', tool === 'plant');
     toolBtns.remove.setAttribute('aria-pressed', tool === 'remove');
     document.getElementById('plant-controls').style.display = tool === 'plant' ? '' : 'none';
@@ -816,6 +987,7 @@ async function main(){
     requestAnimationFrame(loop);
     const dt = Math.min(0.05, (now - prev)/1000); prev = now;
     if (mode === 'walk') stepWalk(dt);
+    if (mode === 'plan') stepPlanPan(dt);
     renderer.render(scene, camera);
   })(performance.now());
 }
